@@ -3,6 +3,7 @@ import scipy.signal as sig
 from scipy.misc import imread as imread
 from skimage.color import rgb2gray
 from scipy import ndimage
+import matplotlib.pyplot as plt
 
 NUM_ROWS = 0
 NUM_COLUMNS = 1
@@ -92,7 +93,21 @@ def build_gaussian_pyramid(im, max_levels, filter_size):
 
 
 def expand(im, row_filter):
-    col_filter = row_filter.resahpe(len(row_filter),1)
+    '''
+    Expend the img to size of n*2 times n*2
+    :param im: The last level in the pyramid to be expended
+    :param row_filter: A row gaussian kernel
+    :return: An image of n*2 times n*2
+    '''
+    row_filter *= TWO
+    col_filter = row_filter.reshape(row_filter.shape[1], 1)
+    #Create the img matrix and assign the smaller img on the odo pixels
+    expanded_im = np.zeros((im.shape[0]*TWO, im.shape[1]*TWO))
+    expanded_im[1::2, 1::2] = im
+    #Convolve with a gaussian kernel
+    expanded_im = ndimage.convolve(expanded_im, row_filter)
+    expanded_im = ndimage.convolve(expanded_im, col_filter)
+    return expanded_im
 
 
 def build_laplacian_pyramid(im, max_levels, filter_size):
@@ -104,27 +119,90 @@ def build_laplacian_pyramid(im, max_levels, filter_size):
     :return: The laplacian pyramid and the gaussian filter vector
     '''
     #get the gaussian filter and the gaussian pyramid
-    gaussian_pyr, row_filter = build_laplacian_pyramid(im, max_levels, filter_size)
+    gaussian_pyr, row_filter = build_gaussian_pyramid(im, max_levels, filter_size)
 
-
+    #build the laplacain pyramid
     pyr = []
-    for level in range(max_levels-1):
-        laplacian_level = gaussian_pyr[level] - expand(gaussian_pyr[level+1], row_filter)
+    for level in range(max_levels):
+        laplacian_level = gaussian_pyr[level] - expand(gaussian_pyr[level+1], row_filter.copy())
         pyr.append(laplacian_level)
+        plt.imshow(laplacian_level, cmap=plt.cm.gray)
+    #The top of the pyramid is the same of the top of the gaussian pyramid
+    pyr.append(gaussian_pyr[len(gaussian_pyr)-1])
 
     return pyr, row_filter
 
 
+def laplacian_to_image(lpyr, filter_vec, coeff):
+    '''
+    Reconstruct the image from the laplacian pyramid
+    :param lpyr: The laplacian pyramid
+    :param filter_vec: The gaussian kernel
+    :param coeff: A vector of coefficient
+    :return: The reconstructed image
+    '''
+    #Multiply the laplacian pyramid by their coefficient
+    coeff = np.asarray(coeff)
+    lpyr = coeff*lpyr
+    #Reconstruct the image
+    re_img = lpyr[len(lpyr)-1]
+    for level in range((lpyr.shape[0] - 2), -1, -1):
+        re_img = lpyr[level] + expand(re_img, filter_vec)
+
+    return re_img
+
+
+def render_pyramid(pyr, levels):
+    '''
+    Render the pyramid into one image
+    :param pyr: The gaussian/laplapcian pyramid
+    :param levels: The number of levels to be seen
+    :return: An image that consist of all the pyramid's images
+    '''
+    row,col = (0, 0)
+    pixel = 0
+    #scaling //todo not sure about this
+    for i in range(levels+1):
+        pyr[i] = (pyr[i] - pyr[i].min())/(pyr[i].max() - pyr[i].min())
+    #figure out the size of the image
+    for index in range(levels+1):
+        row += pyr[index].shape[0]
+        col += pyr[index].shape[1]
+
+    #assigning the gaussian/laplacian pyramid into one image
+    pyr_im = np.zeros((row, col))
+    for j in range(levels + 1):
+        pyr_im[0:pyr[j].shape[0]:1, pixel:pixel+pyr[j].shape[1]:1] = pyr[j]
+        pixel += pyr[j].shape[1]
+
+    return pyr_im
+
+
+def display_pyramid(pyr, levels):
+    '''
+    display the gaussian/laplacian pyramid
+    :param pyr: the gaussian/laplacian pyramid
+    :param levels: the number of level to be display
+    '''
+
+    #create one image for all the pyramid levels
+    pyr_im = render_pyramid(pyr, levels)
+    plt.imshow(pyr_im, cmap=plt.cm.gray)
+    plt.show()
+
 def main():
     im = read_image("gray_orig.png", 1)
-    max_levels = 2
+    max_levels = 4
     filter_size = 3
 
-    x= np.array([1,2,3])
-
-    print(np.insert(x,[::2],0))
-    pyr, filter_vec = build_gaussian_pyramid(im, max_levels, filter_size)
-    a=3
+    # x= np.array([[1,2,3],[4,5,6]])
+    # y=np.array([1,2]).reshape(2,1)
+    # print(x*y)
+    pyr, filter_vec = build_laplacian_pyramid(im, max_levels, filter_size)
+    pyr_im = display_pyramid(pyr,4)
+    #img = laplacian_to_image(pyr,filter_vec, [1,1,1,1,1])
+    plt.imshow(pyr[1],cmap=plt.cm.gray)
+    plt.show()
 
 if "__name__=__main__":
     main()
