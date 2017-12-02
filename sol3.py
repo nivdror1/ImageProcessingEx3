@@ -85,9 +85,10 @@ def build_gaussian_pyramid(im, max_levels, filter_size):
     pyr.append(im)
     last_level = im
     # build the pyramid i.e reduced the images
-    for level in range(max_levels):
-        last_level = reduce_gaussian_pyramid(last_level,row_filter, col_filter)
-        pyr.append(last_level)
+    for level in range(max_levels-1):#todo check about the max level size
+        if not (last_level.shape[0] == 16) or not (last_level.shape[1] == 16):
+            last_level = reduce_gaussian_pyramid(last_level, row_filter, col_filter)
+            pyr.append(last_level)
 
     return pyr, row_filter
 
@@ -123,10 +124,9 @@ def build_laplacian_pyramid(im, max_levels, filter_size):
 
     #build the laplacain pyramid
     pyr = []
-    for level in range(max_levels):
+    for level in range(len(gaussian_pyr)-1):
         laplacian_level = gaussian_pyr[level] - expand(gaussian_pyr[level+1], row_filter.copy())
         pyr.append(laplacian_level)
-        plt.imshow(laplacian_level, cmap=plt.cm.gray)
     #The top of the pyramid is the same of the top of the gaussian pyramid
     pyr.append(gaussian_pyr[len(gaussian_pyr)-1])
 
@@ -146,7 +146,7 @@ def laplacian_to_image(lpyr, filter_vec, coeff):
     lpyr = coeff*lpyr
     #Reconstruct the image
     re_img = lpyr[len(lpyr)-1]
-    for level in range((lpyr.shape[0] - 2), -1, -1):
+    for level in range((len(lpyr) - 2), -1, -1):
         re_img = lpyr[level] + expand(re_img, filter_vec)
 
     return re_img
@@ -162,16 +162,16 @@ def render_pyramid(pyr, levels):
     row,col = (0, 0)
     pixel = 0
     #scaling //todo not sure about this
-    for i in range(levels+1):
+    for i in range(levels):
         pyr[i] = (pyr[i] - pyr[i].min())/(pyr[i].max() - pyr[i].min())
     #figure out the size of the image
-    for index in range(levels+1):
+    for index in range(levels):
         row += pyr[index].shape[0]
         col += pyr[index].shape[1]
 
     #assigning the gaussian/laplacian pyramid into one image
     pyr_im = np.zeros((row, col))
-    for j in range(levels + 1):
+    for j in range(levels): #todo check about the max levels
         pyr_im[0:pyr[j].shape[0]:1, pixel:pixel+pyr[j].shape[1]:1] = pyr[j]
         pixel += pyr[j].shape[1]
 
@@ -190,6 +190,49 @@ def display_pyramid(pyr, levels):
     plt.imshow(pyr_im, cmap=plt.cm.gray)
     plt.show()
 
+
+def build_blend_pyramid(lap_pyr1, lap_pyr2, mask_pyr, max_levels):
+    '''
+    Build the blended image pyramid
+    :param lap_pyr1: The laplacian pyramid of the first image
+    :param lap_pyr2: The laplacian pyramid of the second image
+    :param mask_pyr: The laplacian pyramid of the mask
+    :param max_levels: The number of level in the pyramid
+    :return: The blended pyramid
+    '''
+    lap_blend = []
+    # Creating the blended image pyramid levels
+    for level in range(max_levels):
+        blend_level = (mask_pyr[level] * lap_pyr1[level]) + ((1 - mask_pyr[level]) * lap_pyr2[level])
+        lap_blend.append(blend_level)
+    return lap_blend
+
+def pyramid_blending(im1, im2, mask, max_levels, filter_size_im, filter_size_mask):
+    '''
+    Blend two images via constructing their laplacian pyramid
+    :param im1: The first image
+    :param im2: The second image
+    :param mask: A mask that consist of boolean values
+    :param max_levels: The number of the level in the laplacian pyramids
+    :param filter_size_im: The size of the gaussian filter to be used upon creating the laplacian pyramid of the images
+    :param filter_size_mask: The size of the gaussian filter to be used upon creating the laplacian pyramid of the mask
+    :return: A single blended image of the original images size
+    '''
+    #Building the laplacian pyramid of the images
+    lap_pyr1, filter1 = build_laplacian_pyramid(im1, max_levels, filter_size_im)
+    lap_pyr2, filter2 = build_laplacian_pyramid(im2, max_levels, filter_size_im)
+
+    #Building the gaussian pyramid of the mask
+    mask = np.asarray(mask).astype(np.float64)
+    mask_pyr, filter_mask = build_gaussian_pyramid(mask, max_levels, filter_size_mask)
+
+    #Creating the blended image pyramid
+    lap_blend = build_blend_pyramid(lap_pyr1, lap_pyr2, mask_pyr, max_levels)
+
+    #reconstruct the blended image from the pyramid and clip the values to [0,1]
+    coeff = np.ones(len(lap_blend))
+    return np.clip(laplacian_to_image(lap_blend, filter_size_im, coeff), 0, 1)
+
 def main():
     im = read_image("gray_orig.png", 1)
     max_levels = 4
@@ -199,10 +242,8 @@ def main():
     # y=np.array([1,2]).reshape(2,1)
     # print(x*y)
     pyr, filter_vec = build_laplacian_pyramid(im, max_levels, filter_size)
-    pyr_im = display_pyramid(pyr,4)
-    #img = laplacian_to_image(pyr,filter_vec, [1,1,1,1,1])
-    plt.imshow(pyr[1],cmap=plt.cm.gray)
-    plt.show()
+    #pyr_im = display_pyramid(pyr,4)
+    img = laplacian_to_image(pyr,filter_vec, [1,1,1,1])
 
 if "__name__=__main__":
     main()
