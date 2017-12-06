@@ -4,6 +4,7 @@ from scipy.misc import imread as imread
 from skimage.color import rgb2gray
 from scipy import ndimage
 import matplotlib.pyplot as plt
+import os
 
 NUM_ROWS = 0
 NUM_COLUMNS = 1
@@ -66,8 +67,8 @@ def reduce_gaussian_pyramid(img,row_filter, col_filter):
     :return: An image of n/2 times n/2
     '''
     #blur the img
-    blurred_img = ndimage.convolve(img,row_filter)
-    blurred_img = ndimage.convolve(blurred_img, col_filter)
+    blurred_img = ndimage.filters.convolve(img,row_filter)
+    blurred_img = ndimage.filters.convolve(blurred_img, col_filter)
     #sub-sample every second pixel
     return blurred_img[0::2, 0::2]
 
@@ -87,7 +88,7 @@ def build_gaussian_pyramid(im, max_levels, filter_size):
     # build the pyramid i.e reduced the images
     for level in range(max_levels-1):#todo check about the max level size
         if not (last_level.shape[0] == 16) or not (last_level.shape[1] == 16):
-            last_level = reduce_gaussian_pyramid(last_level, row_filter, col_filter)
+            last_level = reduce_gaussian_pyramid(last_level[::], row_filter, col_filter)
             pyr.append(last_level)
 
     return pyr, row_filter
@@ -104,10 +105,10 @@ def expand(im, row_filter):
     col_filter = row_filter.reshape(row_filter.shape[1], 1)
     #Create the img matrix and assign the smaller img on the odo pixels
     expanded_im = np.zeros((im.shape[0]*TWO, im.shape[1]*TWO))
-    expanded_im[1::2, 1::2] = im
+    expanded_im[::2, ::2] = im
     #Convolve with a gaussian kernel
-    expanded_im = ndimage.convolve(expanded_im, row_filter)
-    expanded_im = ndimage.convolve(expanded_im, col_filter)
+    expanded_im = ndimage.filters.convolve(expanded_im, row_filter)
+    expanded_im = ndimage.filters.convolve(expanded_im, col_filter)
     return expanded_im
 
 
@@ -147,7 +148,7 @@ def laplacian_to_image(lpyr, filter_vec, coeff):
     #Reconstruct the image
     re_img = lpyr[len(lpyr)-1]
     for level in range((len(lpyr) - 2), -1, -1):
-        re_img = lpyr[level] + expand(re_img, filter_vec)
+        re_img = lpyr[level] + expand(re_img, filter_vec.copy())
 
     return re_img
 
@@ -202,7 +203,7 @@ def build_blend_pyramid(lap_pyr1, lap_pyr2, mask_pyr, max_levels):
     '''
     lap_blend = []
     # Creating the blended image pyramid levels
-    for level in range(max_levels):
+    for level in range(len(lap_pyr1)):
         blend_level = (mask_pyr[level] * lap_pyr1[level]) + ((1 - mask_pyr[level]) * lap_pyr2[level])
         lap_blend.append(blend_level)
     return lap_blend
@@ -222,6 +223,7 @@ def pyramid_blending(im1, im2, mask, max_levels, filter_size_im, filter_size_mas
     lap_pyr1, filter1 = build_laplacian_pyramid(im1, max_levels, filter_size_im)
     lap_pyr2, filter2 = build_laplacian_pyramid(im2, max_levels, filter_size_im)
 
+
     #Building the gaussian pyramid of the mask
     mask = np.asarray(mask).astype(np.float64)
     mask_pyr, filter_mask = build_gaussian_pyramid(mask, max_levels, filter_size_mask)
@@ -231,7 +233,125 @@ def pyramid_blending(im1, im2, mask, max_levels, filter_size_im, filter_size_mas
 
     #reconstruct the blended image from the pyramid and clip the values to [0,1]
     coeff = np.ones(len(lap_blend))
-    return np.clip(laplacian_to_image(lap_blend, filter_size_im, coeff), 0, 1)
+
+    return laplacian_to_image(lap_blend, filter1, coeff).clip(0,1)
+
+def pyramid_blending_RGB(im1, im2, mask, max_levels, filter_size_im, filter_size_mask):
+    '''
+    Blend two RGB images via constructing their laplacian pyramid
+    :param im1: The first image
+    :param im2: The second image
+    :param mask: A mask that consist of boolean values
+    :param max_levels: The number of the level in the laplacian pyramids
+    :param filter_size_im: The size of the gaussian filter to be used upon creating the laplacian pyramid of the images
+    :param filter_size_mask: The size of the gaussian filter to be used upon creating the laplacian pyramid of the mask
+    :return: A single blended image of the original images size
+    '''
+    new_im = np.zeros(im1.shape)
+    # Blend the images for every color spectrum
+    for color in range(3):
+        part_im1 = im1[:,:,color]
+        part_im2 = im2[:,:,color]
+        new_im[:,:,color] = pyramid_blending(part_im1, part_im2, mask,max_levels, filter_size_im, filter_size_mask)
+
+    return new_im
+
+
+def relpath(filename):
+    '''
+    Returning the relative path
+    :param filename: An image file name
+    :return: The relative path
+    '''
+    return os.path.join(os.path.dirname(__file__), filename)
+
+
+def resize(im, start_row,start_col,end_row, end_col):
+    '''
+    Resize the images
+    :param im: The original image
+    :param start_row: The start row
+    :param start_col: The start col
+    :param end_row: The end row
+    :param end_col: The end col
+    :return:
+    '''
+    resize_im = im[start_row:end_row:,start_col:end_col:]
+    return resize_im
+
+def blending_example1():
+    '''
+    An example of blending between two images
+    '''
+    #read images
+    im1 = read_image(relpath("black_lake.png"),2)[:,:,:3:]
+    im2 = read_image(relpath("desert.png"),2)[:,:,:3:]
+    mask = read_image(relpath("mask_ex1.png"),1)
+
+    #resizing images
+    im1 = resize(im1,130, 200,im1.shape[0]-126,im1.shape[1])
+    im2 = resize(im2, 100, 100,im2.shape[0]-156,im2.shape[1]-100)
+    mask = resize(mask, 100, 100, mask.shape[0] - 156, mask.shape[1] - 100)
+    mask = np.asarray(mask).astype(np.bool)
+
+    max_levels = 7
+    filter_size_im = 33
+    filter_size_mask = 33
+    #blend the images
+    blend_im = pyramid_blending_RGB(im1,im2, mask, max_levels, filter_size_im, filter_size_mask)
+
+    #showing the images
+    fig1 = plt.figure()
+    filter_size_im = 3
+    filter_size_mask = 3
+    ax1 = fig1.add_subplot(2, 2, 1)
+    plt.imshow(im1)
+    ax2 = fig1.add_subplot(2, 2, 2)
+    plt.imshow(im2)
+    ax1 = fig1.add_subplot(2, 2, 3)
+    plt.imshow(blend_im)
+    ax1 = fig1.add_subplot(2, 2, 4)
+    plt.imshow(mask,cmap="gray")
+    plt.show()
+
+    plt.imshow(blend_im)
+    plt.show()
+
+
+def blending_example2():
+    '''
+    An example of blending between two images
+    '''
+
+    # read images
+    im1 = read_image(relpath("monte_perdido.png"), 2)[:, :, :3:]
+    im2 = read_image(relpath("halwa.png"), 2)[:, :, :3:]
+    mask = read_image(relpath("mask_ex2.png"), 1)
+
+    # resizing images
+    im1 = resize(im1, 1208, 212, im1.shape[0]-200, im1.shape[1]-300)
+    im2 = resize(im2, 1208, 212, im2.shape[0] - 200, im2.shape[1] - 300)
+    mask = resize(mask, 1208, 212, mask.shape[0] - 200, mask.shape[1] - 300)
+    mask = np.asarray(mask).astype(np.bool)
+
+    max_levels = 5
+    filter_size_im = 3
+    filter_size_mask = 3
+
+    # blend the images
+    blend_im = pyramid_blending_RGB(im1, im2, mask, max_levels, filter_size_im, filter_size_mask)
+
+    # showing the images
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(2, 2, 1)
+    plt.imshow(im1)
+    ax2 = fig1.add_subplot(2, 2, 2)
+    plt.imshow(im2)
+    ax1 = fig1.add_subplot(2, 2, 3)
+    plt.imshow(blend_im)
+    ax1 = fig1.add_subplot(2, 2, 4)
+    plt.imshow(mask, cmap="gray")
+    plt.show()
 
 def main():
     im = read_image("gray_orig.png", 1)
@@ -242,8 +362,11 @@ def main():
     # y=np.array([1,2]).reshape(2,1)
     # print(x*y)
     pyr, filter_vec = build_laplacian_pyramid(im, max_levels, filter_size)
-    #pyr_im = display_pyramid(pyr,4)
-    img = laplacian_to_image(pyr,filter_vec, [1,1,1,1])
+    pyr_im = display_pyramid(pyr,4)
+    # img = laplacian_to_image(pyr,filter_vec, [1,1,1,1])
+    # plt.imshow(img,cmap="gray")
+    # plt.show()
 
+    blending_example1()
 if "__name__=__main__":
     main()
